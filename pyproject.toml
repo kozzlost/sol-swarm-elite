@@ -1,0 +1,5 @@
+[build-system]
+requires = ["setuptools>=45"]
+[project]
+name = "sol-swarm-elite"
+version = "1.0.0"
