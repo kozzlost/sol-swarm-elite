@@ -1,5 +1,76 @@
 [build-system]
-requires = ["setuptools>=45"]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "sol-swarm-elite"
 version = "1.0.0"
+description = "AI-powered Solana memecoin research and paper trading system"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "SOL-SWARM Team"}
+    ]
+    keywords = ["solana", "memecoin", "trading", "ai", "research"]
+    classifiers = [
+        "Development Status :: 4 - Beta",
+            "Intended Audience :: Developers",
+                "License :: OSI Approved :: MIT License",
+                    "Programming Language :: Python :: 3.10",
+                        "Programming Language :: Python :: 3.11",
+                            "Programming Language :: Python :: 3.12",
+                            ]
+
+                            dependencies = [
+                                "aiohttp>=3.9.0",
+                                    "httpx>=0.25.0",
+                                        "solders>=0.20.0",
+                                            "solana>=0.32.0",
+                                                "base58>=2.1.0",
+                                                    "python-dotenv>=1.0.0",
+                                                        "pydantic>=2.5.0",
+                                                            "pydantic-settings>=2.1.0",
+                                                                "streamlit>=1.28.0",
+                                                                    "plotly>=5.18.0",
+                                                                        "pandas>=2.1.0",
+                                                                        ]
+
+                                                                        [project.optional-dependencies]
+                                                                        dev = [
+                                                                            "pytest>=7.4.0",
+                                                                                "pytest-asyncio>=0.21.0",
+                                                                                    "pytest-cov>=4.1.0",
+                                                                                        "mypy>=1.7.0",
+                                                                                            "ruff>=0.1.0",
+                                                                                                "black>=23.12.0",
+                                                                                                    "types-requests>=2.31.0",
+                                                                                                    ]
+                                                                                                    
+                                                                                                    [project.scripts]
+                                                                                                    sol-swarm = "main:main"
+                                                                                                    
+                                                                                                    [project.urls]
+                                                                                                    Homepage = "https://github.com/kozzlost/sol-swarm-elite"
+                                                                                                    Repository = "https://github.com/kozzlost/sol-swarm-elite"
+                                                                                                    
+                                                                                                    [tool.setuptools.packages.find]
+                                                                                                    where = ["."]
+                                                                                                    include = ["src*", "dashboard*"]
+                                                                                                    
+                                                                                                    [tool.pytest.ini_options]
+                                                                                                    asyncio_mode = "auto"
+                                                                                                    testpaths = ["tests"]
+                                                                                                    
+                                                                                                    [tool.mypy]
+                                                                                                    python_version = "3.10"
+                                                                                                    ignore_missing_imports = true
+                                                                                                    strict = false
+                                                                                                    
+                                                                                                    [tool.ruff]
+                                                                                                    line-length = 100
+                                                                                                    target-version = "py310"
+                                                                                                    
+                                                                                                    [tool.black]
+                                                                                                    line-length = 100
+                                                                                                    target-version = ["py310", "py311", "py312"]
