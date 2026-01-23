@@ -1,149 +1,199 @@
 #!/usr/bin/env python3
 """
 SOL-SWARM Elite - Main Entry Point
-===================================
-AI-powered Solana memecoin research and paper trading system.
-
-⚠️ WARNING: This is for EDUCATIONAL/RESEARCH purposes ONLY.
-90%+ of memecoins result in complete loss. NFA/DYOR.
+Launches the Streamlit dashboard with full $AGENT tokenomics integration.
 """
 
+import streamlit as st
 import asyncio
 import os
-import sys
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
+st.set_page_config(
+    page_title="SOL-SWARM Elite",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-def print_banner():
-      """Display startup banner with risk warnings."""
-      banner = """
-      ╔═══════════════════════════════════════════════════════════════╗
-      ║           🤖 SOL-SWARM Elite v1.0.0                           ║
-      ║           Solana Memecoin Research Lab                        ║
-      ╠═══════════════════════════════════════════════════════════════╣
-      ║  ⚠️  EXTREME RISK WARNING ⚠️                                   ║
-      ║  • 90%+ of memecoins result in COMPLETE LOSS                  ║
-      ║  • This is NOT financial advice (NFA/DYOR)                    ║
-      ║  • Paper trading mode is ON by default                        ║
-      ║  • NEVER use real funds without extensive testing             ║
-      ╚═══════════════════════════════════════════════════════════════╝
-      """
-      print(banner)
+# Custom CSS
+st.markdown("""
+<style>
+    .main-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px;
+        border-radius: 10px;
+        margin-bottom: 20px;
+        color: white;
+    }
+    .warning-banner {
+        background: #ff6b6b;
+        color: white;
+        padding: 10px;
+        border-radius: 5px;
+        text-align: center;
+        margin-bottom: 20px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
+from src.agents.agent_spawner import get_agent_spawner, AgentStrategy
+from src.tokenomics.agent_token import get_token_manager
+from src.tokenomics.fee_collector import get_fee_collector
+from src.agents.treasury_agent import get_treasury_agent
 
-def check_environment():
-      """Verify required environment variables."""
-      mainnet_enabled = os.getenv("MAINNET_ENABLED", "false").lower() == "true"
+# Header
+st.markdown("""
+<div class="main-header">
+    <h1>🤖 SOL-SWARM Elite Command Center</h1>
+    <p>AI-Powered Memecoin Research Lab | $AGENT Token Funded | 100 Agent Swarm</p>
+</div>
+<div class="warning-banner">
+    ⚠️ RESEARCH/EDUCATIONAL USE ONLY - 90%+ rug probability - NFA/DYOR
+</div>
+""", unsafe_allow_html=True)
 
-    if mainnet_enabled:
-              print("\n🔴 MAINNET MODE DETECTED - REAL FUNDS AT RISK!")
-              private_key = os.getenv("SOLANA_PRIVATE_KEY", "")
-              if not private_key:
-                            print("❌ Error: SOLANA_PRIVATE_KEY required for mainnet")
-                            sys.exit(1)
-                        print("⚠️  Confirm you understand the risks before proceeding.")
-else:
-        print("\n🟢 Paper Trading Mode (Safe - No real funds)")
-        paper_balance = os.getenv("PAPER_BALANCE", "25.0")
-        print(f"📊 Starting paper balance: {paper_balance} SOL")
-
-    return mainnet_enabled
-
-
-async def run_swarm():
-      """Initialize and run the swarm trading system."""
-    from src.agents.scout_agent import ScoutAgent
-    from src.agents.sentiment_agent import SentimentAgent
-    from src.agents.arbiter_agent import ArbiterAgent
-    from src.services.api_aggregator import APIAggregator
-
-    # Initialize API aggregator
-    api = APIAggregator(
-              x_bearer_token=os.getenv("X_BEARER_TOKEN"),
-              cielo_key=os.getenv("CIELO_API_KEY"),
-              lunarcrush_key=os.getenv("LUNARCRUSH_API_KEY")
+# Sidebar
+with st.sidebar:
+    st.title("🎮 Control Panel")
+    
+    mainnet = st.toggle(
+        "🔴 MAINNET MODE",
+        value=os.getenv("MAINNET_ENABLED", "false").lower() == "true"
     )
-
-    # Initialize agents
-    scout = ScoutAgent()
-    sentiment = SentimentAgent()
-    arbiter = ArbiterAgent()
-
-    print("\n🚀 Swarm agents initialized:")
-    print("   • Scout Agent: Token discovery")
-    print("   • Sentiment Agent: Social analysis")
-    print("   • Arbiter Agent: Trading decisions")
-
-    print("\n📡 Starting swarm loop...")
-    print("   Press Ctrl+C to stop\n")
-
-    try:
-              while True:
-                            # Scout for new tokens
-                            tokens = await scout.scan_tokens()
-
-            if tokens:
-                              print(f"🔍 Found {len(tokens)} potential tokens")
-
-                for token in tokens:
-                                      # Analyze sentiment
-                                      sentiment_data = await api.get_aggregated_data(
-                                                                token.get("symbol", ""),
-                                                                token.get("address", "")
-                                      )
-                                      print(f"   📊 {token.get('symbol')}: Sentiment score {sentiment_data.get('composite_score', 0):.2f}")
-
-            # Wait before next scan
-            await asyncio.sleep(30)
-
-except KeyboardInterrupt:
-        print("\n\n🛑 Swarm stopped by user")
-finally:
-        await api.close()
-
-
-def run_dashboard():
-      """Launch the Streamlit dashboard."""
-    import subprocess
-    print("\n🖥️  Starting dashboard on http://localhost:8501")
-    subprocess.run(["streamlit", "run", "dashboard/app.py", "--server.port=8501"])
-
-
-def main():
-      """Main entry point."""
-    print_banner()
-
-    # Check command line arguments
-    if len(sys.argv) > 1:
-              command = sys.argv[1].lower()
-
-        if command == "dashboard":
-                      check_environment()
-                      run_dashboard()
-                      return
-elif command == "help":
-            print("Usage: python main.py [command]")
-            print("\nCommands:")
-            print("  (none)     Run the swarm trading system")
-            print("  dashboard  Launch the Streamlit dashboard")
-            print("  help       Show this help message")
-            return
-
-    # Default: run swarm
-    mainnet = check_environment()
-
+    
     if mainnet:
-              confirm = input("\n⚠️  Type 'I UNDERSTAND THE RISKS' to continue: ")
-        if confirm != "I UNDERSTAND THE RISKS":
-                      print("❌ Confirmation failed. Exiting.")
-                      sys.exit(1)
+        st.error("⚠️ REAL FUNDS AT RISK")
+    else:
+        st.success("✅ Paper Trading Mode")
+    
+    st.divider()
+    
+    st.subheader("Spawn Agent")
+    strategy = st.selectbox("Strategy", [s.value for s in AgentStrategy])
+    capital = st.number_input("Capital (SOL)", min_value=0.01, value=0.05, step=0.01)
+    
+    if st.button("➕ Spawn Agent", use_container_width=True):
+        spawner = get_agent_spawner()
+        agent = asyncio.run(spawner.spawn_agent(AgentStrategy(strategy), capital))
+        if agent:
+            st.success(f"Spawned {agent.name}!")
+        else:
+            st.error("Failed to spawn")
 
-    print("\n" + "="*60)
-    asyncio.run(run_swarm())
+# Main metrics
+spawner = get_agent_spawner()
+token_manager = get_token_manager()
+fee_collector = get_fee_collector()
+treasury = get_treasury_agent()
 
+swarm = spawner.get_swarm_status()
+fees = token_manager.get_treasury_status()
+flywheel = token_manager.get_flywheel_metrics()
 
-if __name__ == "__main__":
-      main()
+col1, col2, col3, col4, col5 = st.columns(5)
+col1.metric("🤖 Agents", f"{swarm['active_agents']}/{swarm['max_agents']}")
+col2.metric("💰 Capital", f"{swarm['total_capital']:.4f} SOL")
+col3.metric("📈 PnL", f"{swarm['total_pnl']:+.4f} SOL")
+col4.metric("💸 Fees Collected", f"{fees['total_fees_collected']:.6f} SOL")
+col5.metric("🔄 Trades Today", f"{swarm['total_trades_today']}")
+
+st.divider()
+
+# Tabs for different views
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🪙 $AGENT Tokenomics", "🤖 Agent Swarm", "📜 Trade Log"])
+
+with tab1:
+    st.subheader("Fee Distribution (25/25/25/25)")
+    
+    import plotly.graph_objects as go
+    
+    labels = ['Bot Trading', 'Infrastructure', 'Development', 'Builder']
+    values = [
+        fees['buckets']['bot_trading']['balance'],
+        fees['buckets']['infrastructure']['balance'],
+        fees['buckets']['development']['balance'],
+        fees['buckets']['builder']['balance']
+    ]
+    
+    fig = go.Figure(data=[go.Pie(
+        labels=labels,
+        values=values if sum(values) > 0 else [25, 25, 25, 25],
+        hole=0.6,
+        marker_colors=['#00D4AA', '#FF6B6B', '#4ECDC4', '#FFE66D']
+    )])
+    fig.update_layout(height=300, margin=dict(t=0, b=0, l=0, r=0))
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Flywheel metrics
+    st.subheader("🔄 Flywheel Effect")
+    fc1, fc2, fc3, fc4 = st.columns(4)
+    fc1.metric("Bot Capital", f"{flywheel['bot_trading_capital']:.4f} SOL")
+    fc2.metric("Trades Enabled", f"{flywheel['additional_trades_enabled']}")
+    fc3.metric("Infra Runway", f"{flywheel['infrastructure_runway_days']:.0f} days")
+    fc4.metric("Dev Hours", f"{flywheel['development_hours_funded']:.1f} hrs")
+
+with tab2:
+    st.subheader("$AGENT Token Configuration")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.text_input("Token Mint", value=token_manager.config.token_mint or "Not deployed yet")
+        st.number_input("Fee Rate (bps)", value=token_manager.config.transaction_fee_bps, disabled=True)
+    
+    with col2:
+        st.text_input("Bot Wallet", value=token_manager.config.bot_trading_wallet or "Not set")
+        st.text_input("Builder Wallet", value=token_manager.config.builder_wallet or "Not set")
+    
+    st.divider()
+    
+    st.subheader("Treasury Status")
+    report = treasury.get_status_report()
+    
+    tcol1, tcol2, tcol3 = st.columns(3)
+    tcol1.metric("Available", f"{report['summary']['available_capital']:.4f} SOL")
+    tcol2.metric("Allocated", f"{report['summary']['allocated_capital']:.4f} SOL")
+    tcol3.metric("Utilization", f"{report['summary']['utilization_pct']:.1f}%")
+
+with tab3:
+    st.subheader("Agent Swarm Status")
+    
+    if swarm['top_performers']:
+        import pandas as pd
+        df = pd.DataFrame(swarm['top_performers'])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No agents spawned yet. Use the sidebar to spawn your first agent!")
+    
+    st.divider()
+    
+    st.subheader("Strategy Distribution")
+    strategy_data = []
+    for strat, data in swarm['strategy_breakdown'].items():
+        strategy_data.append({
+            'Strategy': strat,
+            'Count': data['count'],
+            'Target': data['target'],
+            'Capital': f"{data['total_capital']:.4f}",
+            'PnL': f"{data['total_pnl']:+.4f}"
+        })
+    
+    if strategy_data:
+        st.dataframe(pd.DataFrame(strategy_data), use_container_width=True, hide_index=True)
+
+with tab4:
+    st.subheader("Recent Trades")
+    
+    trades = fee_collector.get_recent_trades(50)
+    if trades:
+        import pandas as pd
+        df = pd.DataFrame(trades)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No trades recorded yet.")
+
+# Footer
+st.divider()
+st.caption("SOL-SWARM Elite v1.0 | $AGENT Token Powered | MIT License | github.com/kozzlost/sol-swarm-elite")
