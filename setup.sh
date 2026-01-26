@@ -1,106 +1,77 @@
 #!/bin/bash
-# ============================================================
-# SOL-SWARM ELITE - COMPLETE SETUP SCRIPT
-# Run this after cloning or extracting the update
-# ============================================================
+# =============================================================================
+# SOL-SWARM Elite Setup Script
+# =============================================================================
 
 set -e
 
-echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║         SOL-SWARM ELITE - AUTOMATED SETUP                ║"
-echo "║         \$AGENT Token | 100 AI Agents | 25/25/25/25       ║"
-echo "╚═══════════════════════════════════════════════════════════╝"
+echo "🤖 SOL-SWARM Elite Setup"
+echo "========================"
 echo ""
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+# Check Python version
+PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2 | cut -d'.' -f1,2)
+REQUIRED_VERSION="3.10"
 
-# Check Python
-echo -e "${YELLOW}[1/6] Checking Python...${NC}"
-if command -v python3 &> /dev/null; then
-    PYTHON_VERSION=$(python3 --version)
-    echo -e "${GREEN}✓ $PYTHON_VERSION${NC}"
-else
-    echo -e "${RED}✗ Python 3 not found. Please install Python 3.10+${NC}"
+if [[ "$(printf '%s\n' "$REQUIRED_VERSION" "$PYTHON_VERSION" | sort -V | head -n1)" != "$REQUIRED_VERSION" ]]; then
+    echo "❌ Python 3.10+ required. Found: $PYTHON_VERSION"
     exit 1
 fi
 
-# Create virtual environment
-echo ""
-echo -e "${YELLOW}[2/6] Creating virtual environment...${NC}"
+echo "✅ Python $PYTHON_VERSION detected"
+
+# Create virtual environment if it doesn't exist
 if [ ! -d "venv" ]; then
+    echo "📦 Creating virtual environment..."
     python3 -m venv venv
-    echo -e "${GREEN}✓ Virtual environment created${NC}"
-else
-    echo -e "${GREEN}✓ Virtual environment already exists${NC}"
 fi
 
-# Activate venv
+# Activate virtual environment
+echo "🔄 Activating virtual environment..."
 source venv/bin/activate
 
-# Install dependencies
-echo ""
-echo -e "${YELLOW}[3/6] Installing dependencies...${NC}"
-pip install -q --upgrade pip
-pip install -q -r requirements.txt
-echo -e "${GREEN}✓ Dependencies installed${NC}"
+# Upgrade pip
+echo "📦 Upgrading pip..."
+pip install --upgrade pip -q
 
-# Setup .env
-echo ""
-echo -e "${YELLOW}[4/6] Setting up configuration...${NC}"
+# Install dependencies
+echo "📦 Installing dependencies..."
+pip install -r requirements.txt -q
+
+# Create .env if it doesn't exist
 if [ ! -f ".env" ]; then
+    echo "📝 Creating .env from template..."
     cp .env.example .env
-    echo -e "${GREEN}✓ Created .env from template${NC}"
-    echo -e "${YELLOW}  ⚠️  Please edit .env with your wallet addresses${NC}"
-else
-    echo -e "${GREEN}✓ .env already exists${NC}"
+    echo "   ⚠️  Edit .env with your configuration"
 fi
 
-# Create directories
-echo ""
-echo -e "${YELLOW}[5/6] Creating directories...${NC}"
-mkdir -p logs data assets
-echo -e "${GREEN}✓ Directories created${NC}"
-
-# Verify installation
-echo ""
-echo -e "${YELLOW}[6/6] Verifying installation...${NC}"
-python3 -c "
-import sys
-try:
-    from src.tokenomics.agent_token import get_token_manager
-    from src.agents.agent_spawner import get_agent_spawner
-    from src.command_center import get_command_center
-    print('✓ Core modules loaded')
-except ImportError as e:
-    print(f'✗ Import error: {e}')
-    sys.exit(1)
-"
+# Create necessary directories
+mkdir -p logs
+mkdir -p data
 
 echo ""
-echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║                    SETUP COMPLETE!                        ║"
-echo "╚═══════════════════════════════════════════════════════════╝"
+echo "✅ Setup complete!"
 echo ""
-echo -e "${GREEN}Next steps:${NC}"
+echo "========================"
+echo "🚀 NEXT STEPS:"
+echo "========================"
 echo ""
-echo "1. Configure your wallets in .env:"
-echo "   - BOT_TRADING_WALLET=your_wallet_address"
-echo "   - INFRASTRUCTURE_WALLET=your_wallet_address"
-echo "   - DEVELOPMENT_WALLET=your_wallet_address"
-echo "   - BUILDER_WALLET=your_wallet_address"
+echo "1. Edit .env with your configuration:"
+echo "   nano .env"
 echo ""
-echo "2. Launch \$AGENT token on pump.fun:"
-echo "   python src/tokenomics/token_launch.py"
+echo "2. Generate fee wallets (optional):"
+echo "   python generate_wallets.py"
 echo ""
 echo "3. Start the dashboard:"
 echo "   streamlit run main.py"
 echo ""
-echo "4. Or run the command center directly:"
-echo "   python src/command_center.py"
+echo "4. Visit: http://localhost:8501"
 echo ""
-echo -e "${YELLOW}⚠️  IMPORTANT: Start with MAINNET_ENABLED=false (paper trading)${NC}"
+echo "========================"
+echo "⚠️  IMPORTANT:"
+echo "========================"
+echo "• Paper trading is enabled by default"
+echo "• Set MAINNET_ENABLED=true for real trading"
+echo "• 90%+ of memecoins result in LOSS"
+echo "• NEVER invest more than you can lose"
 echo ""
