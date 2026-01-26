@@ -1,123 +1,147 @@
 """
-Treasury Agent - Manages the bot trading treasury funded by $AGENT fees.
-Part of the Swarm Elite multi-agent system.
+Treasury Agent - Capital Management & Fee Distribution
+Manages the 4-way fee split and bot trading capital.
 """
 
 import asyncio
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Optional, List
-from enum import Enum
 import logging
+from datetime import datetime, timezone
+from typing import Optional, Dict, List
+from dataclasses import dataclass, field
 
-from src.tokenomics.agent_token import get_token_manager, FeeAllocation
+from src.constants import TOKENOMICS, PAPER_TRADING
+from src.types import TreasurySnapshot
 
 logger = logging.getLogger(__name__)
 
 
-class TreasuryAction(Enum):
-    """Actions the treasury agent can take"""
-    ALLOCATE = "allocate"           # Allocate capital to a trading agent
-    RECALL = "recall"               # Recall capital from an agent
-    REBALANCE = "rebalance"         # Rebalance across agents
-    COMPOUND = "compound"           # Reinvest profits
-    REPORT = "report"               # Generate status report
+@dataclass
+class FeeDistribution:
+    """Record of a fee distribution"""
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    total_fee_sol: float = 0.0
+    
+    # Distribution amounts
+    bot_trading: float = 0.0
+    infrastructure: float = 0.0
+    development: float = 0.0
+    builder: float = 0.0
+    
+    # Transaction
+    tx_signature: Optional[str] = None
+    source_trade_id: Optional[str] = None
 
 
 @dataclass
 class AgentAllocation:
     """Capital allocation to a specific trading agent"""
     agent_id: str
-    agent_type: str  # scout, sniper, arbiter, etc.
-    allocated_sol: float
+    agent_type: str
+    allocated_sol: float = 0.0
+    current_balance: float = 0.0
     pnl: float = 0.0
     trades_executed: int = 0
     win_rate: float = 0.0
     allocated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    last_activity: Optional[datetime] = None
-    
-    @property
-    def current_value(self) -> float:
-        return self.allocated_sol + self.pnl
-    
-    @property
-    def roi_pct(self) -> float:
-        if self.allocated_sol <= 0:
-            return 0.0
-        return (self.pnl / self.allocated_sol) * 100
-
-
-@dataclass
-class TreasuryState:
-    """Current state of the trading treasury"""
-    available_capital: float = 0.0
-    allocated_capital: float = 0.0
-    total_pnl: float = 0.0
-    allocations: List[AgentAllocation] = field(default_factory=list)
-    
-    @property
-    def total_capital(self) -> float:
-        return self.available_capital + self.allocated_capital
-    
-    @property
-    def utilization_pct(self) -> float:
-        if self.total_capital <= 0:
-            return 0.0
-        return (self.allocated_capital / self.total_capital) * 100
 
 
 class TreasuryAgent:
     """
-    Manages the 25% of fees allocated to bot trading capital.
+    Manages the $AGENT token fee distribution and trading capital.
     
-    Responsibilities:
-    - Track available trading capital from fee accumulation
-    - Allocate capital to trading agents based on performance
-    - Monitor agent performance and rebalance
-    - Compound winning strategies
-    - Enforce risk limits
+    Fee Split (2% of all $AGENT trades):
+    - 25% → Bot Trading Treasury
+    - 25% → Infrastructure (AI APIs, servers)
+    - 25% → Development Fund
+    - 25% → Builder Income
+    
+    The Treasury Agent specifically manages the Bot Trading portion,
+    allocating capital to individual trading agents.
     """
     
-    def __init__(
+    def __init__(self):
+        self._running = False
+        
+        # Treasury state
+        self.total_fees_collected: float = 0.0
+        self.fee_history: List[FeeDistribution] = []
+        
+        # Current balances (in SOL)
+        self.bot_trading_balance: float = 0.0
+        self.infrastructure_balance: float = 0.0
+        self.development_balance: float = 0.0
+        self.builder_balance: float = 0.0
+        
+        # Agent allocations
+        self.agent_allocations: Dict[str, AgentAllocation] = {}
+        
+        # Config
+        self.min_allocation_sol = 0.01
+        self.max_allocation_sol = 0.5
+    
+    async def start(self):
+        """Initialize the treasury agent"""
+        self._running = True
+        logger.info("💰 Treasury Agent initialized")
+    
+    async def stop(self):
+        """Shutdown the treasury agent"""
+        self._running = False
+        logger.info("Treasury Agent stopped")
+    
+    # =========================================================================
+    # FEE COLLECTION
+    # =========================================================================
+    
+    async def collect_fee(
         self,
-        max_single_allocation_pct: float = 20.0,  # Max 20% to any single agent
-        min_allocation_sol: float = 0.01,          # Minimum allocation
-        max_agents: int = 100,                     # Support up to 100 agents
-        risk_threshold_drawdown: float = 0.15,    # 15% drawdown triggers review
-    ):
-        self.max_single_allocation_pct = max_single_allocation_pct
-        self.min_allocation_sol = min_allocation_sol
-        self.max_agents = max_agents
-        self.risk_threshold_drawdown = risk_threshold_drawdown
-        
-        self.state = TreasuryState()
-        self.action_history: List[dict] = []
-        
-        # Performance tracking by agent type
-        self.agent_type_performance: dict[str, dict] = {}
-        
-    async def sync_from_fees(self):
+        trade_amount_sol: float,
+        trade_id: Optional[str] = None
+    ) -> FeeDistribution:
         """
-        Sync available capital from the fee distribution system.
-        Called periodically to update treasury with new fee income.
+        Collect and distribute fee from a trade
+        
+        Fee = 2% of trade amount, split 4 ways
         """
-        token_manager = get_token_manager()
-        bot_trading_balance = token_manager.total_distributed[FeeAllocation.BOT_TRADING]
+        # Calculate total fee (2%)
+        total_fee = trade_amount_sol * (TOKENOMICS.TOTAL_FEE_PCT / 100)
         
-        # Calculate how much is new (not yet in our state)
-        current_total = self.state.total_capital
-        new_capital = bot_trading_balance - current_total
+        # Split to 4 buckets (25% each)
+        bot_share = total_fee * (TOKENOMICS.BOT_TRADING_PCT / 100)
+        infra_share = total_fee * (TOKENOMICS.INFRASTRUCTURE_PCT / 100)
+        dev_share = total_fee * (TOKENOMICS.DEVELOPMENT_PCT / 100)
+        builder_share = total_fee * (TOKENOMICS.BUILDER_PCT / 100)
         
-        if new_capital > 0:
-            self.state.available_capital += new_capital
-            logger.info(f"Treasury synced: +{new_capital:.6f} SOL from fees")
-            
-            self._record_action(TreasuryAction.COMPOUND, {
-                "new_capital": new_capital,
-                "total_available": self.state.available_capital
-            })
-            
-        return new_capital
+        # Update balances
+        self.bot_trading_balance += bot_share
+        self.infrastructure_balance += infra_share
+        self.development_balance += dev_share
+        self.builder_balance += builder_share
+        self.total_fees_collected += total_fee
+        
+        # Create distribution record
+        distribution = FeeDistribution(
+            total_fee_sol=total_fee,
+            bot_trading=bot_share,
+            infrastructure=infra_share,
+            development=dev_share,
+            builder=builder_share,
+            source_trade_id=trade_id
+        )
+        
+        self.fee_history.append(distribution)
+        
+        logger.debug(
+            f"💸 Fee collected: {total_fee:.6f} SOL "
+            f"(Bot: {bot_share:.6f}, Infra: {infra_share:.6f}, "
+            f"Dev: {dev_share:.6f}, Builder: {builder_share:.6f})"
+        )
+        
+        return distribution
+    
+    # =========================================================================
+    # CAPITAL ALLOCATION
+    # =========================================================================
     
     async def allocate_to_agent(
         self,
@@ -126,267 +150,211 @@ class TreasuryAgent:
         amount_sol: float
     ) -> Optional[AgentAllocation]:
         """
-        Allocate capital to a trading agent.
-        
-        Args:
-            agent_id: Unique identifier for the agent
-            agent_type: Type of agent (scout, sniper, arbiter, etc.)
-            amount_sol: Amount to allocate in SOL
-            
-        Returns:
-            AgentAllocation if successful, None if rejected
+        Allocate capital from bot trading treasury to an agent
         """
-        # Validation checks
+        if amount_sol > self.bot_trading_balance:
+            logger.warning(
+                f"Insufficient treasury balance: "
+                f"requested {amount_sol:.4f}, available {self.bot_trading_balance:.4f}"
+            )
+            return None
+        
         if amount_sol < self.min_allocation_sol:
-            logger.warning(f"Allocation {amount_sol} SOL below minimum {self.min_allocation_sol}")
+            logger.warning(f"Allocation below minimum: {amount_sol:.4f} < {self.min_allocation_sol}")
             return None
-            
-        if amount_sol > self.state.available_capital:
-            logger.warning(f"Insufficient capital: {amount_sol} > {self.state.available_capital}")
-            return None
-            
-        # Check single allocation limit
-        max_allowed = self.state.total_capital * (self.max_single_allocation_pct / 100)
-        if amount_sol > max_allowed:
-            logger.warning(f"Allocation exceeds {self.max_single_allocation_pct}% limit")
-            amount_sol = max_allowed
-            
-        # Check agent count limit
-        if len(self.state.allocations) >= self.max_agents:
-            logger.warning(f"Max agents ({self.max_agents}) reached")
-            return None
-            
-        # Check for existing allocation to this agent
-        existing = next((a for a in self.state.allocations if a.agent_id == agent_id), None)
-        if existing:
-            # Add to existing allocation
-            existing.allocated_sol += amount_sol
-            self.state.available_capital -= amount_sol
-            self.state.allocated_capital += amount_sol
-            logger.info(f"Added {amount_sol} SOL to existing allocation for {agent_id}")
-            return existing
-            
-        # Create new allocation
-        allocation = AgentAllocation(
-            agent_id=agent_id,
-            agent_type=agent_type,
-            allocated_sol=amount_sol
-        )
         
-        self.state.allocations.append(allocation)
-        self.state.available_capital -= amount_sol
-        self.state.allocated_capital += amount_sol
+        # Deduct from treasury
+        self.bot_trading_balance -= amount_sol
         
-        self._record_action(TreasuryAction.ALLOCATE, {
-            "agent_id": agent_id,
-            "agent_type": agent_type,
-            "amount": amount_sol
-        })
+        # Create or update allocation
+        if agent_id in self.agent_allocations:
+            allocation = self.agent_allocations[agent_id]
+            allocation.allocated_sol += amount_sol
+            allocation.current_balance += amount_sol
+        else:
+            allocation = AgentAllocation(
+                agent_id=agent_id,
+                agent_type=agent_type,
+                allocated_sol=amount_sol,
+                current_balance=amount_sol
+            )
+            self.agent_allocations[agent_id] = allocation
         
-        logger.info(f"Allocated {amount_sol} SOL to {agent_type} agent {agent_id}")
+        logger.info(f"📊 Allocated {amount_sol:.4f} SOL to {agent_type} agent {agent_id[:8]}")
+        
         return allocation
     
-    async def update_agent_performance(
+    async def recall_from_agent(
         self,
         agent_id: str,
-        pnl_change: float,
-        trades: int = 1,
+        amount_sol: Optional[float] = None
+    ) -> float:
+        """
+        Recall capital from an agent back to treasury
+        """
+        if agent_id not in self.agent_allocations:
+            logger.warning(f"No allocation found for agent {agent_id}")
+            return 0.0
+        
+        allocation = self.agent_allocations[agent_id]
+        
+        # Recall all if amount not specified
+        if amount_sol is None:
+            amount_sol = allocation.current_balance
+        
+        amount_sol = min(amount_sol, allocation.current_balance)
+        
+        # Update allocation
+        allocation.current_balance -= amount_sol
+        
+        # Return to treasury
+        self.bot_trading_balance += amount_sol
+        
+        logger.info(f"📊 Recalled {amount_sol:.4f} SOL from agent {agent_id[:8]}")
+        
+        return amount_sol
+    
+    async def update_agent_pnl(
+        self,
+        agent_id: str,
+        pnl: float,
+        trades: int = 0,
         wins: int = 0
     ):
         """
-        Update performance metrics for an agent.
-        Called after each trade execution.
+        Update an agent's P&L and stats
         """
-        allocation = next((a for a in self.state.allocations if a.agent_id == agent_id), None)
-        if not allocation:
-            logger.warning(f"No allocation found for agent {agent_id}")
+        if agent_id not in self.agent_allocations:
             return
-            
-        allocation.pnl += pnl_change
+        
+        allocation = self.agent_allocations[agent_id]
+        allocation.pnl += pnl
+        allocation.current_balance += pnl
         allocation.trades_executed += trades
-        allocation.last_activity = datetime.now(timezone.utc)
         
-        # Update win rate
-        if trades > 0:
-            total_wins = (allocation.win_rate * (allocation.trades_executed - trades)) + wins
+        if allocation.trades_executed > 0:
+            total_wins = int(allocation.win_rate * (allocation.trades_executed - trades) + wins)
             allocation.win_rate = total_wins / allocation.trades_executed
-            
-        # Update total PnL
-        self.state.total_pnl = sum(a.pnl for a in self.state.allocations)
-        
-        # Track by agent type
-        if allocation.agent_type not in self.agent_type_performance:
-            self.agent_type_performance[allocation.agent_type] = {
-                "total_pnl": 0.0,
-                "total_trades": 0,
-                "total_wins": 0
-            }
-        self.agent_type_performance[allocation.agent_type]["total_pnl"] += pnl_change
-        self.agent_type_performance[allocation.agent_type]["total_trades"] += trades
-        self.agent_type_performance[allocation.agent_type]["total_wins"] += wins
-        
-        # Check for drawdown threshold breach
-        if allocation.roi_pct < -self.risk_threshold_drawdown * 100:
-            logger.warning(f"Agent {agent_id} breached {self.risk_threshold_drawdown*100}% drawdown threshold")
-            await self._handle_drawdown_breach(allocation)
     
-    async def _handle_drawdown_breach(self, allocation: AgentAllocation):
-        """Handle an agent that has exceeded drawdown limits"""
-        # Reduce allocation by 50%
-        reduction = allocation.allocated_sol * 0.5
-        allocation.allocated_sol -= reduction
-        self.state.allocated_capital -= reduction
-        self.state.available_capital += reduction
-        
-        self._record_action(TreasuryAction.RECALL, {
-            "agent_id": allocation.agent_id,
-            "reason": "drawdown_breach",
-            "amount_recalled": reduction
-        })
-        
-        logger.info(f"Recalled {reduction} SOL from {allocation.agent_id} due to drawdown")
+    # =========================================================================
+    # REBALANCING
+    # =========================================================================
     
-    async def rebalance(self):
+    async def rebalance_agents(self):
         """
-        Rebalance allocations based on agent performance.
-        Shift capital from underperformers to top performers.
+        Rebalance capital across agents based on performance
         """
-        if len(self.state.allocations) < 2:
+        if not self.agent_allocations:
             return
-            
-        # Sort by ROI
-        sorted_allocations = sorted(
-            self.state.allocations,
-            key=lambda a: a.roi_pct,
+        
+        # Sort agents by performance (ROI)
+        sorted_agents = sorted(
+            self.agent_allocations.values(),
+            key=lambda a: a.pnl / max(a.allocated_sol, 0.001),
             reverse=True
         )
         
-        # Top performers (top 25%)
-        top_count = max(1, len(sorted_allocations) // 4)
-        top_performers = sorted_allocations[:top_count]
+        # Top performers get more capital
+        for i, allocation in enumerate(sorted_agents):
+            if i < len(sorted_agents) // 3:  # Top third
+                roi = allocation.pnl / max(allocation.allocated_sol, 0.001)
+                if roi > 0.1:  # 10%+ ROI
+                    bonus = min(0.02, self.bot_trading_balance * 0.1)
+                    if bonus > 0:
+                        await self.allocate_to_agent(
+                            allocation.agent_id,
+                            allocation.agent_type,
+                            bonus
+                        )
         
-        # Bottom performers (bottom 25%)
-        bottom_performers = sorted_allocations[-top_count:]
-        
-        # Move 10% from each bottom performer to top performers
-        for bottom in bottom_performers:
-            if bottom.allocated_sol < self.min_allocation_sol * 2:
-                continue
-                
-            shift_amount = bottom.allocated_sol * 0.1
-            bottom.allocated_sol -= shift_amount
-            
-            # Distribute to top performers
-            per_top = shift_amount / len(top_performers)
-            for top in top_performers:
-                top.allocated_sol += per_top
-                
-        self._record_action(TreasuryAction.REBALANCE, {
-            "top_performers": [a.agent_id for a in top_performers],
-            "bottom_performers": [a.agent_id for a in bottom_performers]
-        })
-        
-        logger.info("Treasury rebalanced based on performance")
+        logger.info("📊 Agent capital rebalanced based on performance")
     
-    async def auto_allocate_new_capital(self):
-        """
-        Automatically allocate new capital that comes in from fees.
-        Distributes based on agent type performance.
-        """
-        await self.sync_from_fees()
-        
-        available = self.state.available_capital
-        if available < self.min_allocation_sol:
-            return
-            
-        # If we have performance data, weight by it
-        if self.agent_type_performance:
-            # Calculate weights based on PnL (with floor to prevent negative weights)
-            type_scores = {}
-            for agent_type, perf in self.agent_type_performance.items():
-                # Score = PnL + small bonus for trade count
-                score = max(0.1, perf["total_pnl"] + (perf["total_trades"] * 0.001))
-                type_scores[agent_type] = score
-                
-            total_score = sum(type_scores.values())
-            
-            # Allocate proportionally
-            for agent_type, score in type_scores.items():
-                allocation_pct = score / total_score
-                allocation_amount = available * allocation_pct
-                
-                # Find agents of this type
-                agents_of_type = [a for a in self.state.allocations if a.agent_type == agent_type]
-                if agents_of_type:
-                    # Distribute evenly among agents of this type
-                    per_agent = allocation_amount / len(agents_of_type)
-                    for agent in agents_of_type:
-                        agent.allocated_sol += per_agent
-                        self.state.available_capital -= per_agent
-                        self.state.allocated_capital += per_agent
-        else:
-            # No performance data yet - distribute evenly
-            if self.state.allocations:
-                per_agent = available / len(self.state.allocations)
-                for allocation in self.state.allocations:
-                    allocation.allocated_sol += per_agent
-                    self.state.available_capital -= per_agent
-                    self.state.allocated_capital += per_agent
+    # =========================================================================
+    # WITHDRAWAL
+    # =========================================================================
     
-    def get_status_report(self) -> dict:
-        """Generate comprehensive treasury status report"""
-        return {
-            "summary": {
-                "total_capital": self.state.total_capital,
-                "available_capital": self.state.available_capital,
-                "allocated_capital": self.state.allocated_capital,
-                "utilization_pct": self.state.utilization_pct,
-                "total_pnl": self.state.total_pnl,
-                "total_roi_pct": (self.state.total_pnl / max(self.state.total_capital, 0.001)) * 100
-            },
-            "agent_count": len(self.state.allocations),
-            "max_agents": self.max_agents,
-            "agents_available": self.max_agents - len(self.state.allocations),
-            "allocations": [
-                {
-                    "agent_id": a.agent_id,
-                    "agent_type": a.agent_type,
-                    "allocated_sol": a.allocated_sol,
-                    "current_value": a.current_value,
-                    "pnl": a.pnl,
-                    "roi_pct": a.roi_pct,
-                    "trades": a.trades_executed,
-                    "win_rate": a.win_rate,
-                    "last_activity": a.last_activity.isoformat() if a.last_activity else None
-                }
-                for a in sorted(self.state.allocations, key=lambda x: x.roi_pct, reverse=True)
-            ],
-            "performance_by_type": self.agent_type_performance,
-            "risk_metrics": {
-                "max_single_allocation_pct": self.max_single_allocation_pct,
-                "drawdown_threshold": self.risk_threshold_drawdown * 100,
-                "agents_in_drawdown": len([
-                    a for a in self.state.allocations 
-                    if a.roi_pct < -self.risk_threshold_drawdown * 100
-                ])
+    async def withdraw_builder_income(self, amount_sol: Optional[float] = None) -> float:
+        """
+        Withdraw from builder income bucket
+        """
+        if amount_sol is None:
+            amount_sol = self.builder_balance
+        
+        amount_sol = min(amount_sol, self.builder_balance)
+        self.builder_balance -= amount_sol
+        
+        # In production, this would create a transfer to the builder wallet
+        logger.info(f"💵 Builder withdrawal: {amount_sol:.4f} SOL")
+        
+        return amount_sol
+    
+    # =========================================================================
+    # SNAPSHOTS & REPORTING
+    # =========================================================================
+    
+    def get_snapshot(self) -> TreasurySnapshot:
+        """
+        Get current treasury state
+        """
+        return TreasurySnapshot(
+            bot_trading_balance=self.bot_trading_balance,
+            infrastructure_balance=self.infrastructure_balance,
+            development_balance=self.development_balance,
+            builder_balance=self.builder_balance,
+            total_fees_collected=self.total_fees_collected,
+            total_distributed=sum(f.total_fee_sol for f in self.fee_history)
+        )
+    
+    def get_agent_leaderboard(self) -> List[Dict]:
+        """
+        Get agents ranked by performance
+        """
+        leaderboard = []
+        
+        for allocation in self.agent_allocations.values():
+            roi = (allocation.pnl / max(allocation.allocated_sol, 0.001)) * 100
+            
+            leaderboard.append({
+                "agent_id": allocation.agent_id[:8],
+                "type": allocation.agent_type,
+                "allocated": allocation.allocated_sol,
+                "current": allocation.current_balance,
+                "pnl": allocation.pnl,
+                "roi_pct": roi,
+                "trades": allocation.trades_executed,
+                "win_rate": allocation.win_rate * 100
+            })
+        
+        return sorted(leaderboard, key=lambda x: x["roi_pct"], reverse=True)
+    
+    def get_fee_stats(self) -> Dict:
+        """
+        Get fee collection statistics
+        """
+        if not self.fee_history:
+            return {
+                "total_collected": 0,
+                "distribution_count": 0,
+                "avg_fee": 0
             }
+        
+        return {
+            "total_collected": self.total_fees_collected,
+            "distribution_count": len(self.fee_history),
+            "avg_fee": self.total_fees_collected / len(self.fee_history),
+            "bot_trading_total": sum(f.bot_trading for f in self.fee_history),
+            "infrastructure_total": sum(f.infrastructure for f in self.fee_history),
+            "development_total": sum(f.development for f in self.fee_history),
+            "builder_total": sum(f.builder for f in self.fee_history)
         }
-    
-    def _record_action(self, action: TreasuryAction, details: dict):
-        """Record an action in the history"""
-        self.action_history.append({
-            "action": action.value,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "details": details
-        })
 
 
-# Global instance
+# Singleton instance
 _treasury_agent: Optional[TreasuryAgent] = None
 
 
 def get_treasury_agent() -> TreasuryAgent:
-    """Get or create the global treasury agent"""
+    """Get or create the treasury agent singleton"""
     global _treasury_agent
     if _treasury_agent is None:
         _treasury_agent = TreasuryAgent()
