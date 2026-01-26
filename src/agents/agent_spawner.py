@@ -1,35 +1,21 @@
 """
-Agent Spawner - Creates and manages up to 100 AI trading agents.
-Each agent is funded from the treasury and specializes in different strategies.
+Agent Spawner - Swarm Management System
+Spawns, monitors, and manages up to 100 trading agents.
 """
 
 import asyncio
 import uuid
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Optional, Dict, List, Callable, Awaitable
-from enum import Enum
 import logging
 import random
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+from dataclasses import dataclass, field
+from enum import Enum
 
+from src.constants import Strategy, SWARM as SwarmConfig
 from src.agents.treasury_agent import get_treasury_agent
-from src.tokenomics.fee_collector import get_fee_collector, TradeType
 
 logger = logging.getLogger(__name__)
-
-
-class AgentStrategy(Enum):
-    """Trading strategies agents can specialize in"""
-    MOMENTUM = "momentum"           # Follow price momentum
-    GMGN_AI = "gmgn_ai"            # GMGN.ai signal following
-    AXIOM_MIGRATION = "axiom"      # Catch Axiom migrations
-    WHALE_COPY = "whale_copy"      # Copy whale wallets
-    NOVA_JITO = "nova_jito"        # Jito bundle sniping
-    PUMP_GRADUATE = "pump_grad"    # Pump.fun graduates
-    SENTIMENT = "sentiment"        # Social sentiment plays
-    ARBITRAGE = "arbitrage"        # Cross-DEX arb
-    SNIPER = "sniper"             # New token sniping
-    SCALPER = "scalper"           # Quick in-out scalps
 
 
 class AgentStatus(Enum):
@@ -42,40 +28,23 @@ class AgentStatus(Enum):
 
 
 @dataclass
-class AgentConfig:
-    """Configuration for a trading agent"""
-    strategy: AgentStrategy
-    min_trade_sol: float = 0.01
-    max_trade_sol: float = 0.05
-    max_positions: int = 3
-    stop_loss_pct: float = 15.0
-    take_profit_pct: float = 50.0
-    cooldown_after_loss_mins: int = 5
-    max_daily_trades: int = 50
-    sentiment_threshold: float = 2.0
-    rug_score_max: float = 0.3
-
-
-@dataclass
 class SwarmAgent:
-    """Individual AI trading agent in the swarm"""
+    """Individual AI trading agent"""
     agent_id: str
     name: str
-    strategy: AgentStrategy
-    config: AgentConfig
+    strategy: Strategy
     status: AgentStatus = AgentStatus.INITIALIZING
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
-    # Performance tracking
+    # Capital
     allocated_capital: float = 0.0
     current_capital: float = 0.0
+    
+    # Performance
     total_pnl: float = 0.0
     trades_today: int = 0
     wins: int = 0
     losses: int = 0
-    
-    # Position tracking
-    open_positions: List[dict] = field(default_factory=list)
     
     # Timing
     last_trade_at: Optional[datetime] = None
@@ -84,301 +53,357 @@ class SwarmAgent:
     @property
     def win_rate(self) -> float:
         total = self.wins + self.losses
-        return self.wins / total if total > 0 else 0.0
+        return (self.wins / total * 100) if total > 0 else 0.0
     
     @property
     def roi_pct(self) -> float:
         if self.allocated_capital <= 0:
             return 0.0
         return (self.total_pnl / self.allocated_capital) * 100
-    
-    @property
-    def is_active(self) -> bool:
-        if self.status != AgentStatus.ACTIVE:
-            return False
-        if self.cooldown_until and datetime.now(timezone.utc) < self.cooldown_until:
-            return False
-        return True
-    
-    def can_trade(self) -> bool:
-        """Check if agent can execute a trade"""
-        if not self.is_active:
-            return False
-        if self.trades_today >= self.config.max_daily_trades:
-            return False
-        if len(self.open_positions) >= self.config.max_positions:
-            return False
-        if self.current_capital < self.config.min_trade_sol:
-            return False
-        return True
 
 
 class AgentSpawner:
     """
-    Spawns and manages up to 100 AI trading agents.
+    Manages the swarm of trading agents.
     
     Features:
-    - Automatic agent creation based on treasury funding
-    - Strategy diversification
-    - Performance-based capital allocation
-    - Underperformer termination
-    - Dynamic scaling based on fee income
+    - Spawn agents with specific strategies
+    - Auto-scale based on capital availability
+    - Monitor agent performance
+    - Terminate underperformers
+    - Distribute capital from treasury
     """
     
-    MAX_AGENTS = 100
+    # Agent name prefixes by strategy
+    STRATEGY_NAMES = {
+        Strategy.MOMENTUM: ["Swift", "Flash", "Bolt", "Rocket", "Turbo"],
+        Strategy.PUMP_GRADUATE: ["Graduate", "Scholar", "Elite", "Prime", "Alpha"],
+        Strategy.SNIPER: ["Hawk", "Eagle", "Falcon", "Viper", "Strike"],
+        Strategy.WHALE_COPY: ["Orca", "Whale", "Leviathan", "Titan", "Giant"],
+        Strategy.SENTIMENT: ["Pulse", "Vibe", "Mood", "Trend", "Wave"],
+        Strategy.GMGN_AI: ["Neural", "Synth", "Logic", "Matrix", "Cortex"],
+        Strategy.AXIOM_MIGRATION: ["Bridge", "Portal", "Gateway", "Transit", "Flux"],
+        Strategy.NOVA_JITO: ["Nova", "Star", "Comet", "Meteor", "Blaze"],
+        Strategy.ARBITRAGE: ["Arbitron", "Balance", "Delta", "Hedge", "Spread"],
+        Strategy.SCALPER: ["Quick", "Rapid", "Micro", "Nano", "Tick"],
+    }
     
     def __init__(self):
+        self._running = False
         self.agents: Dict[str, SwarmAgent] = {}
-        self.treasury = get_treasury_agent()
-        self.fee_collector = get_fee_collector()
+        self.agent_counter = 0
         
-        # Strategy distribution targets (will auto-balance)
-        self.strategy_targets = {
-            AgentStrategy.MOMENTUM: 15,
-            AgentStrategy.GMGN_AI: 10,
-            AgentStrategy.AXIOM_MIGRATION: 10,
-            AgentStrategy.WHALE_COPY: 10,
-            AgentStrategy.NOVA_JITO: 15,
-            AgentStrategy.PUMP_GRADUATE: 15,
-            AgentStrategy.SENTIMENT: 5,
-            AgentStrategy.ARBITRAGE: 5,
-            AgentStrategy.SNIPER: 10,
-            AgentStrategy.SCALPER: 5,
-        }
-        
-        # Agent name prefixes by strategy
-        self.name_prefixes = {
-            AgentStrategy.MOMENTUM: ["Surge", "Wave", "Thrust", "Rocket"],
-            AgentStrategy.GMGN_AI: ["Oracle", "Prophet", "Sage", "Seer"],
-            AgentStrategy.AXIOM_MIGRATION: ["Bridge", "Migrate", "Cross", "Leap"],
-            AgentStrategy.WHALE_COPY: ["Shadow", "Mirror", "Echo", "Follow"],
-            AgentStrategy.NOVA_JITO: ["Flash", "Bolt", "Strike", "Zap"],
-            AgentStrategy.PUMP_GRADUATE: ["Scholar", "Graduate", "Alumni", "Elite"],
-            AgentStrategy.SENTIMENT: ["Pulse", "Vibe", "Mood", "Feel"],
-            AgentStrategy.ARBITRAGE: ["Arb", "Gap", "Spread", "Delta"],
-            AgentStrategy.SNIPER: ["Scope", "Target", "Aim", "Lock"],
-            AgentStrategy.SCALPER: ["Quick", "Swift", "Rapid", "Blink"],
-        }
-        
-    def _generate_agent_name(self, strategy: AgentStrategy) -> str:
-        """Generate a unique agent name"""
-        prefix = random.choice(self.name_prefixes[strategy])
-        number = len([a for a in self.agents.values() if a.strategy == strategy]) + 1
-        return f"{prefix}-{number:03d}"
+        # Configuration
+        self.max_agents = SwarmConfig.MAX_AGENTS
+        self.min_agents = SwarmConfig.MIN_AGENTS
+        self.capital_per_agent = SwarmConfig.CAPITAL_PER_AGENT_SOL
+    
+    async def start(self):
+        """Initialize the spawner"""
+        self._running = True
+        logger.info(f"🐝 Agent Spawner initialized (max: {self.max_agents} agents)")
+    
+    async def stop(self):
+        """Shutdown all agents"""
+        self._running = False
+        for agent in self.agents.values():
+            agent.status = AgentStatus.TERMINATED
+        logger.info("Agent Spawner stopped")
+    
+    # =========================================================================
+    # SPAWNING
+    # =========================================================================
     
     async def spawn_agent(
         self,
-        strategy: AgentStrategy,
-        initial_capital: float = 0.05,
-        config: Optional[AgentConfig] = None
+        strategy: Strategy,
+        initial_capital: Optional[float] = None
     ) -> Optional[SwarmAgent]:
         """
-        Spawn a new trading agent.
-        
-        Args:
-            strategy: Trading strategy for the agent
-            initial_capital: Starting capital in SOL
-            config: Optional custom configuration
-            
-        Returns:
-            SwarmAgent if successful, None if at capacity or insufficient funds
+        Spawn a new trading agent
         """
-        # Check capacity
-        if len(self.agents) >= self.MAX_AGENTS:
-            logger.warning(f"Cannot spawn agent: at max capacity ({self.MAX_AGENTS})")
+        if len(self.agents) >= self.max_agents:
+            logger.warning(f"Max agents ({self.max_agents}) reached")
             return None
         
-        # Generate identifiers
+        # Generate unique ID and name
+        self.agent_counter += 1
         agent_id = f"agent_{uuid.uuid4().hex[:8]}"
-        name = self._generate_agent_name(strategy)
         
-        # Create config if not provided
-        if config is None:
-            config = AgentConfig(strategy=strategy)
+        names = self.STRATEGY_NAMES.get(strategy, ["Agent"])
+        name = f"{random.choice(names)}-{self.agent_counter:03d}"
         
-        # Create the agent
+        # Create agent
         agent = SwarmAgent(
             agent_id=agent_id,
             name=name,
-            strategy=strategy,
-            config=config
+            strategy=strategy
         )
         
-        # Request capital allocation from treasury
-        allocation = await self.treasury.allocate_to_agent(
+        # Allocate capital from treasury
+        capital = initial_capital or self.capital_per_agent
+        treasury = get_treasury_agent()
+        
+        allocation = await treasury.allocate_to_agent(
             agent_id=agent_id,
             agent_type=strategy.value,
-            amount_sol=initial_capital
+            amount_sol=capital
         )
         
-        if allocation is None:
-            logger.warning(f"Failed to allocate capital for {name}")
-            return None
+        if allocation:
+            agent.allocated_capital = capital
+            agent.current_capital = capital
+        else:
+            # Try with available treasury balance
+            if treasury.bot_trading_balance > 0.01:
+                capital = min(capital, treasury.bot_trading_balance)
+                allocation = await treasury.allocate_to_agent(
+                    agent_id=agent_id,
+                    agent_type=strategy.value,
+                    amount_sol=capital
+                )
+                if allocation:
+                    agent.allocated_capital = capital
+                    agent.current_capital = capital
         
-        agent.allocated_capital = initial_capital
-        agent.current_capital = initial_capital
+        # Register agent
+        self.agents[agent_id] = agent
         agent.status = AgentStatus.ACTIVE
         
-        self.agents[agent_id] = agent
-        
-        logger.info(f"Spawned {strategy.value} agent: {name} with {initial_capital} SOL")
+        logger.info(f"🐝 Spawned: {name} ({strategy.value}) with {agent.allocated_capital:.4f} SOL")
         
         return agent
     
-    async def spawn_swarm(self, total_capital: float) -> List[SwarmAgent]:
+    async def spawn_balanced_swarm(self, target_count: int = 10) -> List[SwarmAgent]:
         """
-        Spawn a diversified swarm of agents based on strategy targets.
-        
-        Args:
-            total_capital: Total SOL to distribute across agents
-            
-        Returns:
-            List of spawned agents
+        Spawn a balanced swarm based on strategy weights
         """
         spawned = []
         
-        # Calculate per-agent allocation
-        total_target_agents = sum(self.strategy_targets.values())
-        per_agent = total_capital / total_target_agents
+        # Calculate agents per strategy
+        total_weight = sum(SwarmConfig.STRATEGY_WEIGHTS.values())
         
-        for strategy, target_count in self.strategy_targets.items():
-            # How many of this strategy do we need?
-            current_count = len([
-                a for a in self.agents.values() 
-                if a.strategy == strategy and a.status == AgentStatus.ACTIVE
-            ])
+        for strategy, weight in SwarmConfig.STRATEGY_WEIGHTS.items():
+            count = max(1, int(target_count * weight / total_weight))
             
-            needed = target_count - current_count
-            
-            for _ in range(needed):
-                if len(self.agents) >= self.MAX_AGENTS:
+            for _ in range(count):
+                if len(self.agents) >= target_count:
                     break
-                    
-                agent = await self.spawn_agent(strategy, per_agent)
+                
+                agent = await self.spawn_agent(strategy)
                 if agent:
                     spawned.append(agent)
         
-        logger.info(f"Spawned {len(spawned)} agents across {len(self.strategy_targets)} strategies")
+        logger.info(f"🐝 Spawned balanced swarm: {len(spawned)} agents")
+        
         return spawned
     
-    async def auto_scale(self):
-        """
-        Automatically scale agent count based on available treasury capital.
-        Called periodically to adjust swarm size.
-        """
-        await self.treasury.sync_from_fees()
-        
-        available = self.treasury.state.available_capital
-        min_per_agent = 0.02  # Minimum SOL per agent
-        
-        # Calculate how many new agents we can afford
-        affordable = int(available / min_per_agent)
-        current = len([a for a in self.agents.values() if a.status == AgentStatus.ACTIVE])
-        headroom = self.MAX_AGENTS - current
-        
-        to_spawn = min(affordable, headroom, 10)  # Max 10 at a time
-        
-        if to_spawn > 0:
-            # Spawn in underrepresented strategies
-            strategy_counts = {}
-            for agent in self.agents.values():
-                if agent.status == AgentStatus.ACTIVE:
-                    strategy_counts[agent.strategy] = strategy_counts.get(agent.strategy, 0) + 1
-            
-            for _ in range(to_spawn):
-                # Find most underrepresented strategy
-                best_strategy = None
-                best_deficit = -1
-                
-                for strategy, target in self.strategy_targets.items():
-                    current = strategy_counts.get(strategy, 0)
-                    deficit = target - current
-                    if deficit > best_deficit:
-                        best_deficit = deficit
-                        best_strategy = strategy
-                
-                if best_strategy and best_deficit > 0:
-                    agent = await self.spawn_agent(best_strategy, min_per_agent)
-                    if agent:
-                        strategy_counts[best_strategy] = strategy_counts.get(best_strategy, 0) + 1
-        
-        logger.info(f"Auto-scale complete: {current + to_spawn} agents active")
+    # =========================================================================
+    # MANAGEMENT
+    # =========================================================================
     
-    async def cull_underperformers(self, roi_threshold: float = -20.0):
+    async def terminate_agent(self, agent_id: str) -> bool:
         """
-        Terminate agents that are significantly underperforming.
-        Reclaims their capital for better-performing agents.
+        Terminate an agent and return capital to treasury
         """
-        terminated = []
+        if agent_id not in self.agents:
+            return False
         
-        for agent in list(self.agents.values()):
-            if agent.status != AgentStatus.ACTIVE:
-                continue
-                
-            # Check ROI threshold
-            if agent.roi_pct < roi_threshold and agent.trades_today >= 5:
-                agent.status = AgentStatus.TERMINATED
-                
-                # Return capital to treasury
-                self.treasury.state.available_capital += agent.current_capital
-                self.treasury.state.allocated_capital -= agent.current_capital
-                
-                terminated.append(agent)
-                logger.info(f"Terminated underperformer: {agent.name} (ROI: {agent.roi_pct:.1f}%)")
+        agent = self.agents[agent_id]
+        agent.status = AgentStatus.TERMINATED
         
-        return terminated
+        # Return capital to treasury
+        if agent.current_capital > 0:
+            treasury = get_treasury_agent()
+            await treasury.recall_from_agent(agent_id, agent.current_capital)
+        
+        del self.agents[agent_id]
+        
+        logger.info(f"💀 Terminated: {agent.name} (PnL: {agent.total_pnl:.4f} SOL)")
+        
+        return True
+    
+    async def pause_agent(self, agent_id: str) -> bool:
+        """Pause an agent"""
+        if agent_id not in self.agents:
+            return False
+        
+        self.agents[agent_id].status = AgentStatus.PAUSED
+        return True
+    
+    async def resume_agent(self, agent_id: str) -> bool:
+        """Resume a paused agent"""
+        if agent_id not in self.agents:
+            return False
+        
+        self.agents[agent_id].status = AgentStatus.ACTIVE
+        return True
     
     def get_agent(self, agent_id: str) -> Optional[SwarmAgent]:
-        """Get an agent by ID"""
+        """Get agent by ID"""
         return self.agents.get(agent_id)
     
     def get_active_agents(self) -> List[SwarmAgent]:
         """Get all active agents"""
         return [a for a in self.agents.values() if a.status == AgentStatus.ACTIVE]
     
-    def get_agents_by_strategy(self, strategy: AgentStrategy) -> List[SwarmAgent]:
-        """Get all agents of a specific strategy"""
+    def get_agents_by_strategy(self, strategy: Strategy) -> List[SwarmAgent]:
+        """Get agents using a specific strategy"""
         return [a for a in self.agents.values() if a.strategy == strategy]
     
-    def get_swarm_status(self) -> dict:
-        """Get comprehensive swarm status"""
-        active = self.get_active_agents()
+    # =========================================================================
+    # PERFORMANCE TRACKING
+    # =========================================================================
+    
+    async def record_trade_result(
+        self,
+        agent_id: str,
+        pnl: float,
+        is_win: bool
+    ):
+        """
+        Record a trade result for an agent
+        """
+        if agent_id not in self.agents:
+            return
         
-        strategy_breakdown = {}
-        for strategy in AgentStrategy:
-            agents = [a for a in active if a.strategy == strategy]
-            strategy_breakdown[strategy.value] = {
-                "count": len(agents),
-                "target": self.strategy_targets.get(strategy, 0),
-                "total_capital": sum(a.current_capital for a in agents),
-                "total_pnl": sum(a.total_pnl for a in agents),
-                "avg_win_rate": sum(a.win_rate for a in agents) / max(len(agents), 1)
+        agent = self.agents[agent_id]
+        agent.total_pnl += pnl
+        agent.current_capital += pnl
+        agent.trades_today += 1
+        agent.last_trade_at = datetime.now(timezone.utc)
+        
+        if is_win:
+            agent.wins += 1
+        else:
+            agent.losses += 1
+            
+            # Cooldown after consecutive losses
+            if agent.losses > 0 and agent.losses % 3 == 0:
+                from datetime import timedelta
+                agent.status = AgentStatus.COOLDOWN
+                agent.cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=5)
+        
+        # Update treasury
+        treasury = get_treasury_agent()
+        await treasury.update_agent_pnl(
+            agent_id=agent_id,
+            pnl=pnl,
+            trades=1,
+            wins=1 if is_win else 0
+        )
+    
+    async def prune_underperformers(self, min_roi: float = -20.0):
+        """
+        Terminate agents with poor performance
+        """
+        to_terminate = []
+        
+        for agent in self.agents.values():
+            if agent.roi_pct < min_roi and agent.trades_today >= 5:
+                to_terminate.append(agent.agent_id)
+        
+        for agent_id in to_terminate:
+            await self.terminate_agent(agent_id)
+        
+        if to_terminate:
+            logger.info(f"🧹 Pruned {len(to_terminate)} underperforming agents")
+    
+    # =========================================================================
+    # AUTO-SCALING
+    # =========================================================================
+    
+    async def auto_scale(self):
+        """
+        Auto-scale the swarm based on treasury balance
+        """
+        treasury = get_treasury_agent()
+        available = treasury.bot_trading_balance
+        current_count = len(self.agents)
+        
+        # Scale up if capital available
+        if available >= self.capital_per_agent * 2 and current_count < self.max_agents:
+            agents_to_spawn = min(
+                int(available / self.capital_per_agent),
+                self.max_agents - current_count,
+                5  # Max 5 at a time
+            )
+            
+            if agents_to_spawn > 0:
+                # Pick strategies for new agents
+                strategies = list(Strategy)
+                for _ in range(agents_to_spawn):
+                    strategy = random.choice(strategies)
+                    await self.spawn_agent(strategy)
+        
+        # Scale down if losses accumulating
+        total_pnl = sum(a.total_pnl for a in self.agents.values())
+        if total_pnl < -0.1 and current_count > self.min_agents:
+            await self.prune_underperformers()
+    
+    # =========================================================================
+    # STATISTICS
+    # =========================================================================
+    
+    def get_swarm_stats(self) -> Dict:
+        """
+        Get overall swarm statistics
+        """
+        agents = list(self.agents.values())
+        
+        if not agents:
+            return {
+                "total_agents": 0,
+                "active_agents": 0,
+                "total_capital": 0,
+                "total_pnl": 0
             }
         
+        active = [a for a in agents if a.status == AgentStatus.ACTIVE]
+        total_capital = sum(a.current_capital for a in agents)
+        total_pnl = sum(a.total_pnl for a in agents)
+        total_trades = sum(a.trades_today for a in agents)
+        total_wins = sum(a.wins for a in agents)
+        
         return {
-            "total_agents": len(self.agents),
+            "total_agents": len(agents),
             "active_agents": len(active),
-            "max_agents": self.MAX_AGENTS,
-            "capacity_pct": (len(active) / self.MAX_AGENTS) * 100,
-            "total_capital": sum(a.current_capital for a in active),
-            "total_pnl": sum(a.total_pnl for a in active),
-            "total_trades_today": sum(a.trades_today for a in active),
-            "strategy_breakdown": strategy_breakdown,
-            "top_performers": sorted(
-                [{"name": a.name, "strategy": a.strategy.value, "roi": a.roi_pct, "pnl": a.total_pnl} 
-                 for a in active],
-                key=lambda x: x["roi"],
-                reverse=True
-            )[:10]
+            "paused_agents": len([a for a in agents if a.status == AgentStatus.PAUSED]),
+            "total_capital": total_capital,
+            "total_pnl": total_pnl,
+            "total_trades": total_trades,
+            "overall_win_rate": (total_wins / total_trades * 100) if total_trades > 0 else 0,
+            "best_agent": max(agents, key=lambda a: a.total_pnl).name if agents else None,
+            "worst_agent": min(agents, key=lambda a: a.total_pnl).name if agents else None,
         }
+    
+    def get_leaderboard(self, limit: int = 10) -> List[Dict]:
+        """
+        Get top performing agents
+        """
+        agents = sorted(self.agents.values(), key=lambda a: a.total_pnl, reverse=True)
+        
+        return [
+            {
+                "rank": i + 1,
+                "name": a.name,
+                "strategy": a.strategy.value,
+                "pnl": a.total_pnl,
+                "roi": a.roi_pct,
+                "win_rate": a.win_rate,
+                "trades": a.trades_today,
+                "status": a.status.value
+            }
+            for i, a in enumerate(agents[:limit])
+        ]
 
 
-# Global instance
+# Singleton instance
 _spawner: Optional[AgentSpawner] = None
 
 
 def get_agent_spawner() -> AgentSpawner:
-    """Get or create the global agent spawner"""
+    """Get or create the agent spawner singleton"""
     global _spawner
     if _spawner is None:
         _spawner = AgentSpawner()
