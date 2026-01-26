@@ -1,0 +1,24 @@
+# Render.com deployment configuration
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: sol-swarm-elite
+    env: docker
+    plan: free
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: MAINNET_ENABLED
+        value: "false"
+      - key: ACTIVE_STRATEGY
+        value: momentum
+      - key: LOG_LEVEL
+        value: INFO
+      # Add your secrets in Render dashboard:
+      # - SOLANA_PRIVATE_KEY
+      # - TWITTER_BEARER_TOKEN
+      # - HELIUS_API_KEY
+      # - BOT_TRADING_WALLET
+      # - INFRASTRUCTURE_WALLET
+      # - DEVELOPMENT_WALLET
+      # - BUILDER_WALLET
