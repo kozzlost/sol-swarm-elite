@@ -1,8 +1,43 @@
 version: '3.8'
+
 services:
-  sol-swarm:
+  sol-swarm-elite:
     build: .
+    container_name: sol-swarm-elite
+    restart: unless-stopped
     ports:
       - "8501:8501"
-    environment:
-      MAINNET_ENABLED: ${MAINNET_ENABLED:-false}
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+# Uncomment for production with Redis caching
+#  redis:
+#    image: redis:alpine
+#    container_name: sol-swarm-redis
+#    restart: unless-stopped
+#    ports:
+#      - "6379:6379"
+#    volumes:
+#      - redis_data:/data
+
+volumes:
+  logs:
+  data:
+#  redis_data:
