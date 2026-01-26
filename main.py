@@ -1,16 +1,26 @@
-#!/usr/bin/env python3
 """
 SOL-SWARM Elite - Main Entry Point
-Launches the Streamlit dashboard with full $AGENT tokenomics integration.
+Streamlit Dashboard for AI-powered Solana memecoin trading.
+
+Run with: streamlit run main.py
 """
 
 import streamlit as st
 import asyncio
-import os
-from dotenv import load_dotenv
+import logging
+from datetime import datetime, timezone
+import plotly.graph_objects as go
+import plotly.express as px
+import pandas as pd
 
-load_dotenv()
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
+# Page config
 st.set_page_config(
     page_title="SOL-SWARM Elite",
     page_icon="🤖",
@@ -18,182 +28,409 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
-st.markdown("""
-<style>
-    .main-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 20px;
-        border-radius: 10px;
-        margin-bottom: 20px;
-        color: white;
-    }
-    .warning-banner {
-        background: #ff6b6b;
-        color: white;
-        padding: 10px;
-        border-radius: 5px;
-        text-align: center;
-        margin-bottom: 20px;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Load environment
+from dotenv import load_dotenv
+load_dotenv()
 
-from src.agents.agent_spawner import get_agent_spawner, AgentStrategy
-from src.tokenomics.agent_token import get_token_manager
-from src.tokenomics.fee_collector import get_fee_collector
-from src.agents.treasury_agent import get_treasury_agent
+from src.command_center import get_command_center
+from src.constants import PAPER_TRADING, MAINNET_ENABLED, ACTIVE_STRATEGY, RISK_WARNING
 
-# Header
-st.markdown("""
-<div class="main-header">
-    <h1>🤖 SOL-SWARM Elite Command Center</h1>
-    <p>AI-Powered Memecoin Research Lab | $AGENT Token Funded | 100 Agent Swarm</p>
-</div>
-<div class="warning-banner">
-    ⚠️ RESEARCH/EDUCATIONAL USE ONLY - 90%+ rug probability - NFA/DYOR
-</div>
-""", unsafe_allow_html=True)
 
-# Sidebar
-with st.sidebar:
-    st.title("🎮 Control Panel")
-    
-    mainnet = st.toggle(
-        "🔴 MAINNET MODE",
-        value=os.getenv("MAINNET_ENABLED", "false").lower() == "true"
-    )
-    
-    if mainnet:
-        st.error("⚠️ REAL FUNDS AT RISK")
+# =============================================================================
+# SESSION STATE
+# =============================================================================
+
+if 'command_center' not in st.session_state:
+    st.session_state.command_center = None
+    st.session_state.is_running = False
+
+
+def get_cc():
+    """Get or create command center"""
+    if st.session_state.command_center is None:
+        st.session_state.command_center = get_command_center()
+    return st.session_state.command_center
+
+
+# =============================================================================
+# HEADER
+# =============================================================================
+
+st.title("🤖 SOL-SWARM Elite")
+st.caption("AI-Powered Solana Memecoin Research Lab")
+
+# Mode indicator
+mode_col1, mode_col2, mode_col3 = st.columns([1, 1, 2])
+
+with mode_col1:
+    if MAINNET_ENABLED:
+        st.error("🔴 MAINNET MODE")
     else:
-        st.success("✅ Paper Trading Mode")
-    
-    st.divider()
-    
-    st.subheader("Spawn Agent")
-    strategy = st.selectbox("Strategy", [s.value for s in AgentStrategy])
-    capital = st.number_input("Capital (SOL)", min_value=0.01, value=0.05, step=0.01)
-    
-    if st.button("➕ Spawn Agent", use_container_width=True):
-        spawner = get_agent_spawner()
-        agent = asyncio.run(spawner.spawn_agent(AgentStrategy(strategy), capital))
-        if agent:
-            st.success(f"Spawned {agent.name}!")
-        else:
-            st.error("Failed to spawn")
+        st.success("📝 PAPER TRADING")
 
-# Main metrics
-spawner = get_agent_spawner()
-token_manager = get_token_manager()
-fee_collector = get_fee_collector()
-treasury = get_treasury_agent()
+with mode_col2:
+    st.info(f"📊 Strategy: {ACTIVE_STRATEGY.value.upper()}")
 
-swarm = spawner.get_swarm_status()
-fees = token_manager.get_treasury_status()
-flywheel = token_manager.get_flywheel_metrics()
 
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("🤖 Agents", f"{swarm['active_agents']}/{swarm['max_agents']}")
-col2.metric("💰 Capital", f"{swarm['total_capital']:.4f} SOL")
-col3.metric("📈 PnL", f"{swarm['total_pnl']:+.4f} SOL")
-col4.metric("💸 Fees Collected", f"{fees['total_fees_collected']:.6f} SOL")
-col5.metric("🔄 Trades Today", f"{swarm['total_trades_today']}")
+# =============================================================================
+# SIDEBAR
+# =============================================================================
 
-st.divider()
-
-# Tabs for different views
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🪙 $AGENT Tokenomics", "🤖 Agent Swarm", "📜 Trade Log"])
-
-with tab1:
-    st.subheader("Fee Distribution (25/25/25/25)")
+with st.sidebar:
+    st.header("⚙️ Controls")
     
-    import plotly.graph_objects as go
-    
-    labels = ['Bot Trading', 'Infrastructure', 'Development', 'Builder']
-    values = [
-        fees['buckets']['bot_trading']['balance'],
-        fees['buckets']['infrastructure']['balance'],
-        fees['buckets']['development']['balance'],
-        fees['buckets']['builder']['balance']
-    ]
-    
-    fig = go.Figure(data=[go.Pie(
-        labels=labels,
-        values=values if sum(values) > 0 else [25, 25, 25, 25],
-        hole=0.6,
-        marker_colors=['#00D4AA', '#FF6B6B', '#4ECDC4', '#FFE66D']
-    )])
-    fig.update_layout(height=300, margin=dict(t=0, b=0, l=0, r=0))
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Flywheel metrics
-    st.subheader("🔄 Flywheel Effect")
-    fc1, fc2, fc3, fc4 = st.columns(4)
-    fc1.metric("Bot Capital", f"{flywheel['bot_trading_capital']:.4f} SOL")
-    fc2.metric("Trades Enabled", f"{flywheel['additional_trades_enabled']}")
-    fc3.metric("Infra Runway", f"{flywheel['infrastructure_runway_days']:.0f} days")
-    fc4.metric("Dev Hours", f"{flywheel['development_hours_funded']:.1f} hrs")
-
-with tab2:
-    st.subheader("$AGENT Token Configuration")
-    
+    # Start/Stop buttons
     col1, col2 = st.columns(2)
+    
     with col1:
-        st.text_input("Token Mint", value=token_manager.config.token_mint or "Not deployed yet")
-        st.number_input("Fee Rate (bps)", value=token_manager.config.transaction_fee_bps, disabled=True)
+        if st.button("▶️ Start", use_container_width=True, type="primary"):
+            cc = get_cc()
+            asyncio.run(cc.start())
+            st.session_state.is_running = True
+            st.rerun()
     
     with col2:
-        st.text_input("Bot Wallet", value=token_manager.config.bot_trading_wallet or "Not set")
-        st.text_input("Builder Wallet", value=token_manager.config.builder_wallet or "Not set")
+        if st.button("⏹️ Stop", use_container_width=True):
+            cc = get_cc()
+            asyncio.run(cc.stop())
+            st.session_state.is_running = False
+            st.rerun()
     
     st.divider()
     
-    st.subheader("Treasury Status")
-    report = treasury.get_status_report()
+    # Pause/Resume
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("⏸️ Pause", use_container_width=True):
+            cc = get_cc()
+            asyncio.run(cc.pause())
     
-    tcol1, tcol2, tcol3 = st.columns(3)
-    tcol1.metric("Available", f"{report['summary']['available_capital']:.4f} SOL")
-    tcol2.metric("Allocated", f"{report['summary']['allocated_capital']:.4f} SOL")
-    tcol3.metric("Utilization", f"{report['summary']['utilization_pct']:.1f}%")
+    with col2:
+        if st.button("▶️ Resume", use_container_width=True):
+            cc = get_cc()
+            asyncio.run(cc.resume())
+    
+    st.divider()
+    
+    # Agent spawning
+    st.subheader("🐝 Swarm Control")
+    agent_count = st.slider("Agents to spawn", 5, 50, 10)
+    
+    if st.button("🐝 Spawn Agents", use_container_width=True):
+        cc = get_cc()
+        asyncio.run(cc.spawn_agents(agent_count))
+        st.success(f"Spawned {agent_count} agents")
+    
+    st.divider()
+    
+    # Emergency controls
+    st.subheader("🚨 Emergency")
+    
+    if st.button("🔴 SELL ALL", use_container_width=True, type="secondary"):
+        cc = get_cc()
+        asyncio.run(cc.force_sell_all())
+        st.warning("Emergency sell triggered!")
+    
+    st.divider()
+    
+    # Risk warning
+    if MAINNET_ENABLED:
+        st.error("""
+        ⚠️ **MAINNET TRADING ACTIVE**
+        
+        Real funds at risk!
+        90%+ of memecoins fail.
+        Only trade what you can lose.
+        """)
+
+
+# =============================================================================
+# MAIN DASHBOARD
+# =============================================================================
+
+# Get dashboard data
+cc = get_cc()
+data = cc.get_dashboard_data()
+
+# Tabs
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📊 Overview",
+    "💰 Treasury",
+    "🐝 Swarm",
+    "📈 Positions",
+    "📜 History"
+])
+
+
+# -----------------------------------------------------------------------------
+# TAB 1: OVERVIEW
+# -----------------------------------------------------------------------------
+
+with tab1:
+    # Key metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            "Paper Balance",
+            f"{data['paper_balance']:.4f} SOL",
+            delta=f"{data['stats']['trades_executed']} trades"
+        )
+    
+    with col2:
+        st.metric(
+            "Active Positions",
+            data['stats']['active_positions'],
+            delta=f"{data['stats']['pending_signals']} pending"
+        )
+    
+    with col3:
+        st.metric(
+            "Tokens Discovered",
+            data['stats']['tokens_discovered'],
+            delta=f"{data['stats']['discovery_cycles']} cycles"
+        )
+    
+    with col4:
+        st.metric(
+            "Signals Generated",
+            data['stats']['signals_generated']
+        )
+    
+    st.divider()
+    
+    # System status
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("🔄 System Status")
+        
+        status_data = {
+            "Mode": data['system']['mode'].upper(),
+            "Running": "✅ Yes" if data['system']['is_running'] else "❌ No",
+            "Paused": "⏸️ Yes" if data['system']['is_paused'] else "▶️ No",
+            "Uptime": f"{int(data['system']['uptime_secs'] // 60)} minutes"
+        }
+        
+        for key, value in status_data.items():
+            st.text(f"{key}: {value}")
+    
+    with col2:
+        st.subheader("📊 Quick Stats")
+        
+        if data['swarm']:
+            swarm = data['swarm']
+            st.text(f"Active Agents: {swarm.get('active_agents', 0)}")
+            st.text(f"Total P&L: {swarm.get('total_pnl', 0):.4f} SOL")
+            st.text(f"Win Rate: {swarm.get('overall_win_rate', 0):.1f}%")
+            st.text(f"Best Agent: {swarm.get('best_agent', 'N/A')}")
+
+
+# -----------------------------------------------------------------------------
+# TAB 2: TREASURY
+# -----------------------------------------------------------------------------
+
+with tab2:
+    st.subheader("💰 $AGENT Token Treasury")
+    
+    treasury = data['treasury']
+    
+    # Fee distribution chart
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        fig = go.Figure(data=[go.Pie(
+            labels=['Bot Trading', 'Infrastructure', 'Development', 'Builder'],
+            values=[
+                treasury['bot_trading'],
+                treasury['infrastructure'],
+                treasury['development'],
+                treasury['builder']
+            ],
+            hole=0.4,
+            marker_colors=['#00D4AA', '#FF6B6B', '#4ECDC4', '#FFE66D']
+        )])
+        
+        fig.update_layout(
+            title="Fee Distribution",
+            showlegend=True,
+            height=400
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.metric("Total Fees Collected", f"{treasury['total_fees']:.6f} SOL")
+        
+        st.divider()
+        
+        st.caption("**Bucket Balances**")
+        st.text(f"🤖 Bot Trading: {treasury['bot_trading']:.6f} SOL")
+        st.text(f"🖥️ Infrastructure: {treasury['infrastructure']:.6f} SOL")
+        st.text(f"💻 Development: {treasury['development']:.6f} SOL")
+        st.text(f"👤 Builder: {treasury['builder']:.6f} SOL")
+    
+    # Flywheel explanation
+    with st.expander("📖 How the Flywheel Works"):
+        st.markdown("""
+        ### $AGENT Token Fee Model
+        
+        Every $AGENT trade generates a **2% fee** that's split:
+        
+        - **25% Bot Trading** → Funds the AI trading agents
+        - **25% Infrastructure** → Server costs, AI APIs
+        - **25% Development** → Future improvements
+        - **25% Builder** → Your income
+        
+        **The Flywheel:**
+        ```
+        More Trading → More Fees → Better Bots → Better Returns → More Users → More Trading
+        ```
+        """)
+
+
+# -----------------------------------------------------------------------------
+# TAB 3: SWARM
+# -----------------------------------------------------------------------------
 
 with tab3:
-    st.subheader("Agent Swarm Status")
+    st.subheader("🐝 Agent Swarm")
     
-    if swarm['top_performers']:
-        import pandas as pd
-        df = pd.DataFrame(swarm['top_performers'])
-        st.dataframe(df, use_container_width=True, hide_index=True)
-    else:
-        st.info("No agents spawned yet. Use the sidebar to spawn your first agent!")
+    swarm = data['swarm']
+    
+    # Swarm metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Agents", swarm.get('total_agents', 0))
+    
+    with col2:
+        st.metric("Active", swarm.get('active_agents', 0))
+    
+    with col3:
+        st.metric("Total P&L", f"{swarm.get('total_pnl', 0):.4f} SOL")
+    
+    with col4:
+        st.metric("Win Rate", f"{swarm.get('overall_win_rate', 0):.1f}%")
     
     st.divider()
     
-    st.subheader("Strategy Distribution")
-    strategy_data = []
-    for strat, data in swarm['strategy_breakdown'].items():
-        strategy_data.append({
-            'Strategy': strat,
-            'Count': data['count'],
-            'Target': data['target'],
-            'Capital': f"{data['total_capital']:.4f}",
-            'PnL': f"{data['total_pnl']:+.4f}"
-        })
+    # Leaderboard
+    st.subheader("🏆 Agent Leaderboard")
     
-    if strategy_data:
-        st.dataframe(pd.DataFrame(strategy_data), use_container_width=True, hide_index=True)
+    leaderboard = data.get('leaderboard', [])
+    
+    if leaderboard:
+        df = pd.DataFrame(leaderboard)
+        
+        # Style the dataframe
+        def style_pnl(val):
+            color = 'green' if val > 0 else 'red' if val < 0 else 'gray'
+            return f'color: {color}'
+        
+        st.dataframe(
+            df,
+            column_config={
+                "rank": st.column_config.NumberColumn("Rank", width="small"),
+                "name": st.column_config.TextColumn("Agent", width="medium"),
+                "strategy": st.column_config.TextColumn("Strategy", width="medium"),
+                "pnl": st.column_config.NumberColumn("P&L (SOL)", format="%.4f"),
+                "roi": st.column_config.NumberColumn("ROI %", format="%.1f%%"),
+                "win_rate": st.column_config.NumberColumn("Win Rate", format="%.1f%%"),
+                "trades": st.column_config.NumberColumn("Trades", width="small"),
+                "status": st.column_config.TextColumn("Status", width="small"),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+    else:
+        st.info("No agents spawned yet. Use the sidebar to spawn agents.")
+
+
+# -----------------------------------------------------------------------------
+# TAB 4: POSITIONS
+# -----------------------------------------------------------------------------
 
 with tab4:
-    st.subheader("Recent Trades")
+    st.subheader("📈 Open Positions")
     
-    trades = fee_collector.get_recent_trades(50)
-    if trades:
-        import pandas as pd
-        df = pd.DataFrame(trades)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+    positions = data.get('positions', [])
+    
+    if positions:
+        for pos in positions:
+            col1, col2, col3, col4 = st.columns(4)
+            
+            pnl_color = "green" if pos['pnl_pct'] > 0 else "red"
+            
+            with col1:
+                st.text(f"${pos['symbol']}")
+            
+            with col2:
+                st.text(f"Entry: ${pos['entry']:.6f}")
+            
+            with col3:
+                st.text(f"Current: ${pos['current']:.6f}")
+            
+            with col4:
+                st.markdown(f"P&L: <span style='color:{pnl_color}'>{pos['pnl_pct']:.2f}%</span>", unsafe_allow_html=True)
+            
+            st.divider()
     else:
-        st.info("No trades recorded yet.")
+        st.info("No open positions")
 
-# Footer
+
+# -----------------------------------------------------------------------------
+# TAB 5: HISTORY
+# -----------------------------------------------------------------------------
+
+with tab5:
+    st.subheader("📜 Recent Trades")
+    
+    trades = data.get('recent_trades', [])
+    
+    if trades:
+        df = pd.DataFrame(trades)
+        
+        st.dataframe(
+            df,
+            column_config={
+                "symbol": st.column_config.TextColumn("Token"),
+                "action": st.column_config.TextColumn("Action"),
+                "amount": st.column_config.NumberColumn("Amount (SOL)", format="%.4f"),
+                "pnl": st.column_config.NumberColumn("P&L (SOL)", format="%.4f"),
+                "status": st.column_config.TextColumn("Status"),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+    else:
+        st.info("No trades executed yet")
+
+
+# =============================================================================
+# FOOTER
+# =============================================================================
+
 st.divider()
-st.caption("SOL-SWARM Elite v1.0 | $AGENT Token Powered | MIT License | github.com/kozzlost/sol-swarm-elite")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.caption("SOL-SWARM Elite v1.0")
+
+with col2:
+    st.caption("$AGENT Token Powered")
+
+with col3:
+    st.caption("[GitHub](https://github.com/kozzlost/sol-swarm-elite)")
+
+
+# =============================================================================
+# AUTO-REFRESH
+# =============================================================================
+
+# Auto-refresh every 10 seconds when running
+if st.session_state.is_running:
+    import time
+    time.sleep(10)
+    st.rerun()
