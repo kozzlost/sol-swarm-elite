@@ -22,6 +22,24 @@ from src.agents import (
 
 logger = logging.getLogger(__name__)
 
+from src.agents.ceo_agent import CEOAgent
+
+class CommandCenter:
+    def __init__(self):
+        self.ceo = CEOAgent()
+        self.scout = ScoutAgent()
+        self.sentiment = SentimentAgent()
+        # ... other agents
+
+    def process_signal(self, signal: TradeSignal):
+        decision = self.ceo.allocate_resources(signal)
+        if decision.action == "trade":
+            # Delegate to other agents
+            sentiment_score = self.sentiment.analyze(signal.token)
+            arbiter_decision = self.arbiter.decide(signal, sentiment_score)
+            if arbiter_decision.action == "buy":
+                self.sniper.execute_trade(arbiter_decision)
+
 
 @dataclass
 class SystemState:
