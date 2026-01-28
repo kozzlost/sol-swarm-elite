@@ -5,6 +5,10 @@ solders==0.18.0
 solana==0.32.0
 web3==6.11.0
 
+# Dashboard and Visualization
+streamlit==1.29.0
+plotly==5.18.0
+
 # AI and Machine Learning
 transformers==4.35.0
 torch==2.1.0
